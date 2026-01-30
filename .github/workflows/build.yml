@@ -19,6 +19,10 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     
+    defaults:
+      run:
+        working-directory: aakso-tauri-app
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,6 +32,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: aakso-tauri-app/package-lock.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-action@stable
@@ -40,11 +45,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'AAKSO Order Manager v__VERSION__'
-          releaseBody: 'Download the appropriate installer for your platform.'
-          releaseDraft: true
-          prerelease: false
+          projectPath: aakso-tauri-app
           args: ${{ matrix.args }}
 
       - name: Upload Windows artifacts
@@ -53,8 +54,8 @@ jobs:
         with:
           name: windows-build
           path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+            aakso-tauri-app/src-tauri/target/release/bundle/msi/*.msi
+            aakso-tauri-app/src-tauri/target/release/bundle/nsis/*.exe
 
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest'
@@ -62,5 +63,4 @@ jobs:
         with:
           name: macos-build
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app
+            aakso-tauri-app/src-tauri/target/release/bundle/dmg/*.dmg
