@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AAKSO Rubber Works - Order Management</title>
+    <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <img src="/logo.png" alt="AAKSO Rubber Works" class="app-logo">
+            <div class="header-info">
+                <h1>AAKSO RUBBER WORKS</h1>
+                <p>Mfg: Rubber Extruded, Moulded & Lining Products</p>
+                <p>Admn. Off/Works: D-34, Phase V, IDA, Jeedimetla, Hyderabad-500 055</p>
+                <p>E-mail: aaksorubber@gmail.com | Ph: 9440624313, 9550884200</p>
+            </div>
+        </header>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab-button active" data-tab="entry">New Order/Quotation</button>
+            <button class="tab-button" data-tab="view">View Orders</button>
+        </div>
+
+        <!-- Order Entry Tab -->
+        <div id="entry-tab" class="tab-content active">
+            <form id="order-form" class="order-form" novalidate>
+                <div class="form-section">
+                    <h2>Order Details</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Work Order No:</label>
+                            <input type="text" id="order-no" placeholder="Auto-generated if empty">
+                        </div>
+                        <div class="form-group">
+                            <label>Date:</label>
+                            <input type="date" id="order-date" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group full-width">
+                            <label>Customer (M/s):</label>
+                            <input type="text" id="customer-name" placeholder="Enter customer name">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Contact Person:</label>
+                            <input type="text" id="contact-person">
+                        </div>
+                        <div class="form-group">
+                            <label>Phone:</label>
+                            <input type="text" id="phone">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h2>Items</h2>
+                    <div class="items-table-container">
+                        <table id="items-table" class="items-table">
+                            <thead>
+                                <tr>
+                                    <th>Sl. No.</th>
+                                    <th>Name of Machine</th>
+                                    <th>Type</th>
+                                    <th>Qty.</th>
+                                    <th>Length (mm)</th>
+                                    <th>Dia (mm)</th>
+                                    <th>Shore A°</th>
+                                    <th>Remarks</th>
+                                    <th>Rate Rs.</th>
+                                    <th>Amount Rs.</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="items-tbody">
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="item-entry-form">
+                        <h3>Add Item</h3>
+                        <div class="form-row">
+                            <input type="text" id="item-machine" placeholder="Machine Name *">
+                            <input type="text" id="item-type" placeholder="Type">
+                            <input type="number" id="item-qty" placeholder="Qty" value="1" min="0.01" step="0.01">
+                            <input type="number" id="item-length" placeholder="Length (mm)">
+                            <input type="number" id="item-dia" placeholder="Dia (mm)">
+                            <input type="text" id="item-shore" placeholder="Shore A°">
+                            <input type="text" id="item-remarks" placeholder="Remarks">
+                            <input type="number" id="item-rate" placeholder="Rate Rs. *" min="0" step="0.01">
+                            <button type="button" id="add-item-btn" class="btn btn-primary">Add Item</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <h2>Totals</h2>
+                    <div class="totals-row">
+                        <div class="total-item">
+                            <label>Subtotal Rs:</label>
+                            <span id="subtotal">0.00</span>
+                        </div>
+                        <div class="total-item">
+                            <label>GST %:</label>
+                            <input type="number" id="gst-percent" value="18" min="0" max="100" step="0.01">
+                        </div>
+                        <div class="total-item">
+                            <label>GST Amount Rs:</label>
+                            <span id="gst-amount">0.00</span>
+                        </div>
+                        <div class="total-item">
+                            <label>Total Rs:</label>
+                            <span id="total-amount" class="total-large">0.00</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Delivery:</label>
+                            <input type="text" id="delivery">
+                        </div>
+                        <div class="form-group">
+                            <label>Remarks:</label>
+                            <input type="text" id="remarks">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-success">Save Order</button>
+                    <button type="button" id="clear-form-btn" class="btn btn-secondary">Clear Form</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- View Orders Tab -->
+        <div id="view-tab" class="tab-content">
+            <div class="view-controls">
+                <div class="filter-group">
+                    <label>Filter by Status:</label>
+                    <select id="status-filter">
+                        <option value="All">All</option>
+                        <option value="New">New</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Rejected">Rejected</option>
+                        <option value="Completed">Completed</option>
+                    </select>
+                </div>
+                <button id="refresh-btn" class="btn btn-primary">Refresh</button>
+                <button id="export-btn" class="btn btn-secondary">Export Excel</button>
+            </div>
+
+            <div class="orders-table-container">
+                <table id="orders-table" class="orders-table">
+                    <thead>
+                        <tr>
+                            <th>Order No</th>
+                            <th>Date</th>
+                            <th>Customer</th>
+                            <th>Contact</th>
+                            <th>Phone</th>
+                            <th>Status</th>
+                            <th>Items</th>
+                            <th>Total Rs.</th>
+                            <th>Delivery</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orders-tbody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Order Details Modal -->
+    <div id="order-details-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Order Details</h2>
+            <div id="order-details-content"></div>
+            <div class="modal-actions">
+                <button id="save-pdf-btn" class="btn btn-primary">📄 Save as PDF</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Change Modal -->
+    <div id="status-modal" class="modal">
+        <div class="modal-content small">
+            <span class="close">&times;</span>
+            <h2>Change Status</h2>
+            <div class="form-group">
+                <label>Current Status:</label>
+                <span id="current-status"></span>
+            </div>
+            <div class="form-group">
+                <label>New Status:</label>
+                <select id="new-status">
+                    <option value="New">New</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Rejected">Rejected</option>
+                    <option value="Completed">Completed</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button id="save-status-btn" class="btn btn-success">Save</button>
+                <button id="cancel-status-btn" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

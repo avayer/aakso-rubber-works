@@ -1,0 +1,28 @@
+# Python (removed)
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Tauri
+aakso-tauri-app/node_modules/
+aakso-tauri-app/src-tauri/target/
+aakso-tauri-app/dist/
+aakso-tauri-app/src-tauri/Cargo.lock
+
+# Data files
+*.xlsx
+orders.json
+orders.db
+aakso-tauri-app/orders.json
+aakso-tauri-app/orders.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
