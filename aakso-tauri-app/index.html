@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AAKSO Rubber Works - Order Management</title>
     <link rel="stylesheet" href="/src/styles.css">
+    <script src="/src/lib/html2pdf.bundle.min.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -17,6 +18,9 @@
                 <p>Admn. Off/Works: D-34, Phase V, IDA, Jeedimetla, Hyderabad-500 055</p>
                 <p>E-mail: aaksorubber@gmail.com | Ph: 9440624313, 9550884200</p>
             </div>
+            <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+                <span class="theme-icon">🌙</span>
+            </button>
         </header>
 
         <!-- Tabs -->
@@ -41,12 +45,10 @@
                         </div>
                     </div>
                     <div class="form-row">
-                        <div class="form-group full-width">
+                        <div class="form-group">
                             <label>Customer (M/s):</label>
                             <input type="text" id="customer-name" placeholder="Enter customer name">
                         </div>
-                    </div>
-                    <div class="form-row">
                         <div class="form-group">
                             <label>Contact Person:</label>
                             <input type="text" id="contact-person">
@@ -54,6 +56,41 @@
                         <div class="form-group">
                             <label>Phone:</label>
                             <input type="text" id="phone">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Remarks:</label>
+                            <input type="text" id="remarks">
+                        </div>
+                        <div class="form-group">
+                            <label>Delivery Note:</label>
+                            <input type="text" id="delivery-note">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Delivery Note Date:</label>
+                            <input type="date" id="delivery-note-date">
+                        </div>
+                        <div class="form-group">
+                            <label>Buyer's Order Number:</label>
+                            <input type="text" id="buyer-order-no">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Buyer's Order Date:</label>
+                            <input type="date" id="buyer-order-date">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Name of the Machine:</label>
+                            <input type="text" id="machine-name">
                         </div>
                     </div>
                 </div>
@@ -64,8 +101,6 @@
                         <table id="items-table" class="items-table">
                             <thead>
                                 <tr>
-                                    <th>Sl. No.</th>
-                                    <th>Name of Machine</th>
                                     <th>Type</th>
                                     <th>Qty.</th>
                                     <th>Length (mm)</th>
@@ -83,17 +118,17 @@
                     </div>
                     
                     <div class="item-entry-form">
-                        <h3>Add Item</h3>
+                        <h3 id="item-form-title">Add Item</h3>
                         <div class="form-row">
-                            <input type="text" id="item-machine" placeholder="Machine Name *">
                             <input type="text" id="item-type" placeholder="Type">
-                            <input type="number" id="item-qty" placeholder="Qty" value="1" min="0.01" step="0.01">
+                            <input type="number" id="item-qty" placeholder="Qty" min="0" step="0.01">
                             <input type="number" id="item-length" placeholder="Length (mm)">
                             <input type="number" id="item-dia" placeholder="Dia (mm)">
                             <input type="text" id="item-shore" placeholder="Shore A°">
                             <input type="text" id="item-remarks" placeholder="Remarks">
                             <input type="number" id="item-rate" placeholder="Rate Rs. *" min="0" step="0.01">
                             <button type="button" id="add-item-btn" class="btn btn-primary">Add Item</button>
+                            <button type="button" id="cancel-edit-btn" class="btn btn-secondary" style="display: none;">Cancel</button>
                         </div>
                     </div>
                 </div>
@@ -120,19 +155,6 @@
                     </div>
                 </div>
 
-                <div class="form-section">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Delivery:</label>
-                            <input type="text" id="delivery">
-                        </div>
-                        <div class="form-group">
-                            <label>Remarks:</label>
-                            <input type="text" id="remarks">
-                        </div>
-                    </div>
-                </div>
-
                 <div class="form-actions">
                     <button type="submit" class="btn btn-success">Save Order</button>
                     <button type="button" id="clear-form-btn" class="btn btn-secondary">Clear Form</button>
@@ -144,13 +166,18 @@
         <div id="view-tab" class="tab-content">
             <div class="view-controls">
                 <div class="filter-group">
+                    <label>Search:</label>
+                    <input type="text" id="search-input" placeholder="Order ID or Customer Name">
+                </div>
+                <div class="filter-group">
                     <label>Filter by Status:</label>
                     <select id="status-filter">
                         <option value="All">All</option>
                         <option value="New">New</option>
                         <option value="In Progress">In Progress</option>
                         <option value="Rejected">Rejected</option>
-                        <option value="Completed">Completed</option>
+                        <option value="Ready to deliver">Ready to deliver</option>
+                        <option value="Delivered">Delivered</option>
                     </select>
                 </div>
                 <button id="refresh-btn" class="btn btn-primary">Refresh</button>
@@ -161,21 +188,31 @@
                 <table id="orders-table" class="orders-table">
                     <thead>
                         <tr>
-                            <th>Order No</th>
-                            <th>Date</th>
-                            <th>Customer</th>
-                            <th>Contact</th>
-                            <th>Phone</th>
-                            <th>Status</th>
-                            <th>Items</th>
-                            <th>Total Rs.</th>
-                            <th>Delivery</th>
+                            <th class="sortable" data-sort="orderNo">Order No <span class="sort-icon">↕</span></th>
+                            <th class="sortable" data-sort="date">Date <span class="sort-icon">↕</span></th>
+                            <th class="sortable" data-sort="customerName">Customer <span class="sort-icon">↕</span></th>
+                            <th class="sortable" data-sort="contactPerson">Contact <span class="sort-icon">↕</span></th>
+                            <th class="sortable" data-sort="phone">Phone <span class="sort-icon">↕</span></th>
+                            <th class="sortable" data-sort="status">Status <span class="sort-icon">↕</span></th>
+                            <th class="sortable" data-sort="itemsCount">Items <span class="sort-icon">↕</span></th>
+                            <th class="sortable" data-sort="total">Total Rs. <span class="sort-icon">↕</span></th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="orders-tbody">
                     </tbody>
                 </table>
+            </div>
+
+            <div class="pagination-container">
+                <div class="pagination-info">
+                    <span>Showing <strong id="pagination-start">0</strong> - <strong id="pagination-end">0</strong> of <strong id="pagination-total">0</strong> orders</span>
+                </div>
+                <div class="pagination-controls">
+                    <button id="pagination-prev" class="btn btn-secondary btn-sm" disabled>Previous</button>
+                    <span class="pagination-page-info">Page <strong id="pagination-current">1</strong> of <strong id="pagination-total-pages">1</strong></span>
+                    <button id="pagination-next" class="btn btn-secondary btn-sm" disabled>Next</button>
+                </div>
             </div>
         </div>
     </div>
@@ -207,12 +244,29 @@
                     <option value="New">New</option>
                     <option value="In Progress">In Progress</option>
                     <option value="Rejected">Rejected</option>
-                    <option value="Completed">Completed</option>
+                    <option value="Ready to deliver">Ready to deliver</option>
+                    <option value="Delivered">Delivered</option>
                 </select>
             </div>
             <div class="form-actions">
                 <button id="save-status-btn" class="btn btn-success">Save</button>
                 <button id="cancel-status-btn" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-modal" class="modal">
+        <div class="modal-content small">
+            <span class="close">&times;</span>
+            <h2>Delete Order</h2>
+            <div class="form-group">
+                <p style="color: var(--text-primary); margin-bottom: 15px;">Are you sure you want to delete order <strong id="delete-order-no"></strong>?</p>
+                <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 20px;">This action cannot be undone.</p>
+            </div>
+            <div class="form-actions">
+                <button id="confirm-delete-btn" class="btn btn-danger">Delete</button>
+                <button id="cancel-delete-btn" class="btn btn-secondary">Cancel</button>
             </div>
         </div>
     </div>

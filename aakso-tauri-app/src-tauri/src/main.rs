@@ -16,12 +16,21 @@ struct Order {
     contact_person: String,
     phone: String,
     status: String,
+    #[serde(rename = "machineName")]
+    machine_name: String,
     items: Vec<OrderItem>,
     subtotal: f64,
     gst: f64,
     total: f64,
-    delivery: String,
     remarks: String,
+    #[serde(rename = "deliveryNote")]
+    delivery_note: String,
+    #[serde(rename = "deliveryNoteDate")]
+    delivery_note_date: String,
+    #[serde(rename = "buyerOrderNo")]
+    buyer_order_no: String,
+    #[serde(rename = "buyerOrderDate")]
+    buyer_order_date: String,
     #[serde(rename = "createdDate")]
     created_date: String,
 }
@@ -30,7 +39,6 @@ struct Order {
 struct OrderItem {
     #[serde(rename = "slNo")]
     sl_no: u32,
-    machine: String,
     #[serde(rename = "type")]
     item_type: String,
     qty: f64,
@@ -71,35 +79,106 @@ fn init_database() -> SqlResult<Connection> {
             contact_person TEXT,
             phone TEXT,
             status TEXT NOT NULL,
+            machine_name TEXT,
             subtotal REAL NOT NULL,
             gst REAL NOT NULL,
             total REAL NOT NULL,
-            delivery TEXT,
             remarks TEXT,
+            delivery_note TEXT,
+            delivery_note_date TEXT,
+            buyer_order_no TEXT,
+            buyer_order_date TEXT,
             created_date TEXT NOT NULL
         )",
         [],
     )?;
 
-    // Create order_items table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS order_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_no TEXT NOT NULL,
-            sl_no INTEGER NOT NULL,
-            machine TEXT NOT NULL,
-            item_type TEXT,
-            qty REAL NOT NULL,
-            length TEXT,
-            dia TEXT,
-            shore TEXT,
-            remarks TEXT,
-            rate REAL NOT NULL,
-            amount REAL NOT NULL,
-            FOREIGN KEY (order_no) REFERENCES orders(order_no) ON DELETE CASCADE
-        )",
+    // Add new columns to existing tables (migration)
+    let _ = conn.execute("ALTER TABLE orders ADD COLUMN machine_name TEXT", []);
+    let _ = conn.execute("ALTER TABLE orders ADD COLUMN delivery_note TEXT", []);
+    let _ = conn.execute("ALTER TABLE orders ADD COLUMN delivery_note_date TEXT", []);
+    let _ = conn.execute("ALTER TABLE orders ADD COLUMN buyer_order_no TEXT", []);
+    let _ = conn.execute("ALTER TABLE orders ADD COLUMN buyer_order_date TEXT", []);
+
+    // Check if order_items table exists and has the old 'machine' column
+    let table_exists: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='order_items'",
         [],
-    )?;
+        |row| Ok(row.get::<_, i32>(0)? > 0),
+    ).unwrap_or(false);
+    
+    if table_exists {
+        // Check if machine column exists
+        let mut has_machine = false;
+        let mut check_stmt = conn.prepare("PRAGMA table_info(order_items)")?;
+        let columns = check_stmt.query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })?;
+        
+        for column in columns {
+            if let Ok(col_name) = column {
+                if col_name == "machine" {
+                    has_machine = true;
+                    break;
+                }
+            }
+        }
+        
+        // If machine column exists, we need to migrate
+        if has_machine {
+            // Create new table without machine column
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS order_items_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_no TEXT NOT NULL,
+                    sl_no INTEGER NOT NULL,
+                    item_type TEXT,
+                    qty REAL NOT NULL,
+                    length TEXT,
+                    dia TEXT,
+                    shore TEXT,
+                    remarks TEXT,
+                    rate REAL NOT NULL,
+                    amount REAL NOT NULL,
+                    FOREIGN KEY (order_no) REFERENCES orders(order_no) ON DELETE CASCADE
+                )",
+                [],
+            )?;
+            
+            // Copy data (excluding machine column)
+            conn.execute(
+                "INSERT INTO order_items_new (id, order_no, sl_no, item_type, qty, length, dia, shore, remarks, rate, amount)
+                 SELECT id, order_no, sl_no, item_type, qty, length, dia, shore, remarks, rate, amount FROM order_items",
+                [],
+            )?;
+            
+            // Drop old table
+            conn.execute("DROP TABLE order_items", [])?;
+            
+            // Rename new table
+            conn.execute("ALTER TABLE order_items_new RENAME TO order_items", [])?;
+        }
+    } else {
+        // Create order_items table if it doesn't exist
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS order_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_no TEXT NOT NULL,
+                sl_no INTEGER NOT NULL,
+                item_type TEXT,
+                qty REAL NOT NULL,
+                length TEXT,
+                dia TEXT,
+                shore TEXT,
+                remarks TEXT,
+                rate REAL NOT NULL,
+                amount REAL NOT NULL,
+                FOREIGN KEY (order_no) REFERENCES orders(order_no) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+    }
 
     // Create index for faster queries
     conn.execute(
@@ -120,10 +199,22 @@ fn get_connection() -> SqlResult<Connection> {
 }
 
 fn load_orders_from_db() -> Result<Vec<Order>, String> {
+    load_orders_paginated_from_db(None, None)
+}
+
+fn load_orders_paginated_from_db(page: Option<u32>, page_size: Option<u32>) -> Result<Vec<Order>, String> {
     let conn = get_connection().map_err(|e| format!("Database error: {}", e))?;
+    
+    let query = if let (Some(p), Some(ps)) = (page, page_size) {
+        let offset = (p - 1) * ps;
+        format!("SELECT order_no, date, customer_name, contact_person, phone, status, machine_name, subtotal, gst, total, remarks, delivery_note, delivery_note_date, buyer_order_no, buyer_order_date, created_date FROM orders ORDER BY created_date DESC LIMIT {} OFFSET {}", ps, offset)
+    } else {
+        // Load all orders if pagination not specified
+        "SELECT order_no, date, customer_name, contact_person, phone, status, machine_name, subtotal, gst, total, remarks, delivery_note, delivery_note_date, buyer_order_no, buyer_order_date, created_date FROM orders ORDER BY created_date DESC".to_string()
+    };
 
     let mut stmt = conn
-        .prepare("SELECT order_no, date, customer_name, contact_person, phone, status, subtotal, gst, total, delivery, remarks, created_date FROM orders ORDER BY created_date DESC")
+        .prepare(&query)
         .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
     let order_iter = stmt
@@ -135,13 +226,17 @@ fn load_orders_from_db() -> Result<Vec<Order>, String> {
                 contact_person: row.get(3).unwrap_or_default(),
                 phone: row.get(4).unwrap_or_default(),
                 status: row.get(5)?,
+                machine_name: row.get(6).unwrap_or_default(),
                 items: Vec::new(), // Will be loaded separately
-                subtotal: row.get(6)?,
-                gst: row.get(7)?,
-                total: row.get(8)?,
-                delivery: row.get(9).unwrap_or_default(),
+                subtotal: row.get(7)?,
+                gst: row.get(8)?,
+                total: row.get(9)?,
                 remarks: row.get(10).unwrap_or_default(),
-                created_date: row.get(11)?,
+                delivery_note: row.get(11).unwrap_or_default(),
+                delivery_note_date: row.get(12).unwrap_or_default(),
+                buyer_order_no: row.get(13).unwrap_or_default(),
+                buyer_order_date: row.get(14).unwrap_or_default(),
+                created_date: row.get(15)?,
             })
         })
         .map_err(|e| format!("Failed to query orders: {}", e))?;
@@ -152,22 +247,21 @@ fn load_orders_from_db() -> Result<Vec<Order>, String> {
         
         // Load items for this order
         let mut item_stmt = conn
-            .prepare("SELECT sl_no, machine, item_type, qty, length, dia, shore, remarks, rate, amount FROM order_items WHERE order_no = ? ORDER BY sl_no")
+            .prepare("SELECT sl_no, item_type, qty, length, dia, shore, remarks, rate, amount FROM order_items WHERE order_no = ? ORDER BY sl_no")
             .map_err(|e| format!("Failed to prepare items query: {}", e))?;
 
         let item_iter = item_stmt
             .query_map([&order.order_no], |row| {
                 Ok(OrderItem {
                     sl_no: row.get(0)?,
-                    machine: row.get(1)?,
-                    item_type: row.get(2).unwrap_or_default(),
-                    qty: row.get(3)?,
-                    length: row.get(4).unwrap_or_default(),
-                    dia: row.get(5).unwrap_or_default(),
-                    shore: row.get(6).unwrap_or_default(),
-                    remarks: row.get(7).unwrap_or_default(),
-                    rate: row.get(8)?,
-                    amount: row.get(9)?,
+                    item_type: row.get(1).unwrap_or_default(),
+                    qty: row.get(2)?,
+                    length: row.get(3).unwrap_or_default(),
+                    dia: row.get(4).unwrap_or_default(),
+                    shore: row.get(5).unwrap_or_default(),
+                    remarks: row.get(6).unwrap_or_default(),
+                    rate: row.get(7)?,
+                    amount: row.get(8)?,
                 })
             })
             .map_err(|e| format!("Failed to query items: {}", e))?;
@@ -191,8 +285,8 @@ fn save_order_to_db(order: &Order) -> Result<(), String> {
 
     // Insert order
     tx.execute(
-        "INSERT OR REPLACE INTO orders (order_no, date, customer_name, contact_person, phone, status, subtotal, gst, total, delivery, remarks, created_date) 
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT OR REPLACE INTO orders (order_no, date, customer_name, contact_person, phone, status, machine_name, subtotal, gst, total, remarks, delivery_note, delivery_note_date, buyer_order_no, buyer_order_date, created_date) 
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         rusqlite::params![
             order.order_no,
             order.date,
@@ -200,11 +294,15 @@ fn save_order_to_db(order: &Order) -> Result<(), String> {
             order.contact_person,
             order.phone,
             order.status,
+            order.machine_name,
             order.subtotal,
             order.gst,
             order.total,
-            order.delivery,
             order.remarks,
+            order.delivery_note,
+            order.delivery_note_date,
+            order.buyer_order_no,
+            order.buyer_order_date,
             order.created_date
         ],
     )
@@ -220,12 +318,11 @@ fn save_order_to_db(order: &Order) -> Result<(), String> {
     // Insert items
     for item in &order.items {
         tx.execute(
-            "INSERT INTO order_items (order_no, sl_no, machine, item_type, qty, length, dia, shore, remarks, rate, amount) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO order_items (order_no, sl_no, item_type, qty, length, dia, shore, remarks, rate, amount) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 order.order_no,
                 item.sl_no,
-                item.machine,
                 item.item_type,
                 item.qty,
                 item.length,
@@ -245,9 +342,42 @@ fn save_order_to_db(order: &Order) -> Result<(), String> {
     Ok(())
 }
 
+fn get_total_orders_count() -> Result<u32, String> {
+    let conn = get_connection().map_err(|e| format!("Database error: {}", e))?;
+    let count: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM orders",
+        [],
+        |row| Ok(row.get(0)?),
+    ).map_err(|e| format!("Failed to get count: {}", e))?;
+    Ok(count)
+}
+
+#[derive(Serialize)]
+struct PaginatedOrders {
+    orders: Vec<Order>,
+    total: u32,
+    page: u32,
+    #[serde(rename = "pageSize")]
+    page_size: u32,
+    #[serde(rename = "totalPages")]
+    total_pages: u32,
+}
+
 #[tauri::command]
-fn load_orders() -> Result<Vec<Order>, String> {
-    load_orders_from_db()
+fn load_orders(page: Option<u32>, pageSize: Option<u32>) -> Result<PaginatedOrders, String> {
+    let page = page.unwrap_or(1);
+    let page_size = pageSize.unwrap_or(50);
+    let orders = load_orders_paginated_from_db(Some(page), Some(page_size))?;
+    let total = get_total_orders_count()?;
+    let total_pages = (total as f64 / page_size as f64).ceil() as u32;
+    
+    Ok(PaginatedOrders {
+        orders,
+        total,
+        page,
+        page_size,
+        total_pages,
+    })
 }
 
 #[tauri::command]
@@ -286,6 +416,7 @@ fn delete_order(order_no: String) -> Result<(), String> {
 
 #[tauri::command]
 fn export_orders(file_path: String) -> Result<(), String> {
+    // Load all orders for export (no pagination)
     let orders = load_orders_from_db()?;
     
     // Use rust_xlsxwriter to create Excel file
@@ -297,7 +428,8 @@ fn export_orders(file_path: String) -> Result<(), String> {
     // Write headers
     let headers = vec![
         "Order No", "Date", "Customer Name", "Contact Person", "Phone",
-        "Status", "Subtotal", "GST", "Total", "Delivery", "Remarks", "Created Date"
+        "Status", "Machine Name", "Subtotal", "GST", "Total", "Remarks",
+        "Delivery Note", "Delivery Note Date", "Buyer's Order Number", "Buyer's Order Date", "Created Date"
     ];
     
     for (col, header) in headers.iter().enumerate() {
@@ -320,17 +452,25 @@ fn export_orders(file_path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to write phone: {}", e))?;
         worksheet.write_string(row_num, 5, &order.status)
             .map_err(|e| format!("Failed to write status: {}", e))?;
-        worksheet.write_number(row_num, 6, order.subtotal)
+        worksheet.write_string(row_num, 6, &order.machine_name)
+            .map_err(|e| format!("Failed to write machineName: {}", e))?;
+        worksheet.write_number(row_num, 7, order.subtotal)
             .map_err(|e| format!("Failed to write subtotal: {}", e))?;
-        worksheet.write_number(row_num, 7, order.gst)
+        worksheet.write_number(row_num, 8, order.gst)
             .map_err(|e| format!("Failed to write gst: {}", e))?;
-        worksheet.write_number(row_num, 8, order.total)
+        worksheet.write_number(row_num, 9, order.total)
             .map_err(|e| format!("Failed to write total: {}", e))?;
-        worksheet.write_string(row_num, 9, &order.delivery)
-            .map_err(|e| format!("Failed to write delivery: {}", e))?;
         worksheet.write_string(row_num, 10, &order.remarks)
             .map_err(|e| format!("Failed to write remarks: {}", e))?;
-        worksheet.write_string(row_num, 11, &order.created_date)
+        worksheet.write_string(row_num, 11, &order.delivery_note)
+            .map_err(|e| format!("Failed to write deliveryNote: {}", e))?;
+        worksheet.write_string(row_num, 12, &order.delivery_note_date)
+            .map_err(|e| format!("Failed to write deliveryNoteDate: {}", e))?;
+        worksheet.write_string(row_num, 13, &order.buyer_order_no)
+            .map_err(|e| format!("Failed to write buyerOrderNo: {}", e))?;
+        worksheet.write_string(row_num, 14, &order.buyer_order_date)
+            .map_err(|e| format!("Failed to write buyerOrderDate: {}", e))?;
+        worksheet.write_string(row_num, 15, &order.created_date)
             .map_err(|e| format!("Failed to write createdDate: {}", e))?;
     }
 

@@ -66,7 +66,16 @@ function setupBrowserMode() {
 // State
 let items = [];
 let orders = [];
+let filteredOrders = [];
 let currentOrderIndex = -1;
+let orderToDelete = null; // Store orderNo for deletion confirmation
+let sortColumn = null;
+let sortDirection = 'asc';
+let currentPage = 1;
+let pageSize = 50;
+let totalOrders = 0;
+let totalPages = 1;
+let editingItemIndex = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -81,6 +90,12 @@ async function initializeApp() {
     if (!tauriAvailable) {
         setupBrowserMode();
     }
+    
+    // Load and apply saved theme
+    loadTheme();
+    
+    // Theme toggle handler
+    document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
     
     // Set today's date
     const today = new Date().toISOString().split('T')[0];
@@ -106,6 +121,12 @@ async function initializeApp() {
         addItem();
     });
     
+    document.getElementById('cancel-edit-btn').addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelEdit();
+    });
+    
     orderForm.addEventListener('submit', saveOrder);
     
     // Prevent form submission on Enter in form fields (except Save button)
@@ -125,7 +146,7 @@ async function initializeApp() {
     document.getElementById('gst-percent').addEventListener('input', updateTotals);
     
     // Prevent form submission when pressing Enter in item fields
-    document.querySelectorAll('#item-machine, #item-type, #item-qty, #item-length, #item-dia, #item-shore, #item-remarks, #item-rate').forEach(input => {
+    document.querySelectorAll('#item-type, #item-qty, #item-length, #item-dia, #item-shore, #item-remarks, #item-rate').forEach(input => {
         input.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -136,14 +157,41 @@ async function initializeApp() {
     });
     
     // View handlers
-    document.getElementById('status-filter').addEventListener('change', loadOrders);
-    document.getElementById('refresh-btn').addEventListener('click', () => loadOrders(true));
+    document.getElementById('status-filter').addEventListener('change', () => {
+        currentPage = 1;
+        loadOrders(true, currentPage);
+    });
+    document.getElementById('search-input').addEventListener('input', applyFiltersAndSort);
+    document.getElementById('refresh-btn').addEventListener('click', () => loadOrders(true, currentPage));
     document.getElementById('export-btn').addEventListener('click', exportExcel);
+    
+    // Pagination handlers
+    setupPaginationHandlers();
+    
+    // Sorting handlers
+    document.querySelectorAll('.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+            const column = th.dataset.sort;
+            if (sortColumn === column) {
+                sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortColumn = column;
+                sortDirection = 'asc';
+            }
+            updateSortIcons();
+            applyFiltersAndSort();
+        });
+    });
 
     // Modal handlers
     document.querySelectorAll('.close').forEach(close => {
         close.addEventListener('click', (e) => {
-            e.target.closest('.modal').style.display = 'none';
+            const modal = e.target.closest('.modal');
+            modal.style.display = 'none';
+            // Clear delete state if closing delete modal
+            if (modal.id === 'delete-modal') {
+                orderToDelete = null;
+            }
         });
     });
 
@@ -152,11 +200,18 @@ async function initializeApp() {
         document.getElementById('status-modal').style.display = 'none';
     });
 
+    // Delete modal handlers
+    document.getElementById('confirm-delete-btn').addEventListener('click', confirmDeleteOrder);
+    document.getElementById('cancel-delete-btn').addEventListener('click', () => {
+        document.getElementById('delete-modal').style.display = 'none';
+        orderToDelete = null;
+    });
+
     // Save as PDF button handler
     document.getElementById('save-pdf-btn').addEventListener('click', saveOrderAsPdf);
 
     // Load initial data
-    await loadOrders(true);
+    await loadOrders(true, 1);
 }
 
 function switchTab(tab) {
@@ -169,17 +224,10 @@ function switchTab(tab) {
 }
 
 function addItem() {
-    const machine = document.getElementById('item-machine').value.trim();
     const rateInput = document.getElementById('item-rate').value.trim();
     const qtyInput = document.getElementById('item-qty').value.trim();
 
     // Validation
-    if (!machine) {
-        alert('Please enter Machine name');
-        document.getElementById('item-machine').focus();
-        return;
-    }
-
     if (!rateInput || isNaN(parseFloat(rateInput)) || parseFloat(rateInput) < 0) {
         alert('Please enter a valid Rate (must be a number >= 0)');
         document.getElementById('item-rate').focus();
@@ -187,17 +235,21 @@ function addItem() {
     }
 
     const rate = parseFloat(rateInput);
-    const qty = qtyInput ? parseFloat(qtyInput) : 1;
+    // Allow empty or 0 quantity - if empty or 0, use 0
+    const qty = qtyInput ? parseFloat(qtyInput) : 0;
     
-    if (qty <= 0 || isNaN(qty)) {
-        alert('Please enter a valid Quantity (must be > 0)');
+    // Validate quantity is not negative
+    if (isNaN(qty) || qty < 0) {
+        alert('Please enter a valid Quantity (must be >= 0)');
         document.getElementById('item-qty').focus();
         return;
     }
 
+    // If quantity is 0 or empty, amount = rate, otherwise amount = qty * rate
+    const amount = qty === 0 ? rate : qty * rate;
+
     const item = {
-        slNo: items.length + 1,
-        machine: machine,
+        slNo: editingItemIndex !== null ? items[editingItemIndex].slNo : items.length + 1,
         type: document.getElementById('item-type').value.trim(),
         qty: qty,
         length: document.getElementById('item-length').value.trim(),
@@ -205,13 +257,57 @@ function addItem() {
         shore: document.getElementById('item-shore').value.trim(),
         remarks: document.getElementById('item-remarks').value.trim(),
         rate: rate,
-        amount: qty * rate
+        amount: amount
     };
 
-    items.push(item);
+    if (editingItemIndex !== null) {
+        // Update existing item
+        items[editingItemIndex] = item;
+        editingItemIndex = null;
+        document.getElementById('add-item-btn').textContent = 'Add Item';
+        document.getElementById('item-form-title').textContent = 'Add Item';
+        document.getElementById('cancel-edit-btn').style.display = 'none';
+    } else {
+        // Add new item
+        items.push(item);
+    }
+    
     renderItems();
     clearItemForm();
     updateTotals();
+}
+
+function editItem(index) {
+    if (index < 0 || index >= items.length) return;
+    
+    const item = items[index];
+    editingItemIndex = index;
+    
+    // Populate form fields
+    document.getElementById('item-type').value = item.type || '';
+    document.getElementById('item-qty').value = item.qty === 0 ? '' : item.qty;
+    document.getElementById('item-length').value = item.length || '';
+    document.getElementById('item-dia').value = item.dia || '';
+    document.getElementById('item-shore').value = item.shore || '';
+    document.getElementById('item-remarks').value = item.remarks || '';
+    document.getElementById('item-rate').value = item.rate || '';
+    
+    // Update UI
+    document.getElementById('add-item-btn').textContent = 'Update Item';
+    document.getElementById('item-form-title').textContent = 'Edit Item';
+    document.getElementById('cancel-edit-btn').style.display = 'inline-block';
+    
+    // Scroll to form
+    document.getElementById('item-type').focus();
+    document.getElementById('item-entry-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function cancelEdit() {
+    editingItemIndex = null;
+    document.getElementById('add-item-btn').textContent = 'Add Item';
+    document.getElementById('item-form-title').textContent = 'Add Item';
+    document.getElementById('cancel-edit-btn').style.display = 'none';
+    clearItemForm();
 }
 
 function removeItem(index) {
@@ -227,29 +323,30 @@ function renderItems() {
     // Filter out any invalid items before rendering
     items = items.filter(item => 
         item && 
-        item.machine && 
-        item.machine.trim() !== '' && 
         !isNaN(item.rate) && 
         item.rate >= 0 &&
         !isNaN(item.qty) && 
-        item.qty > 0 &&
+        item.qty >= 0 &&
         !isNaN(item.amount)
     );
 
     items.forEach((item, index) => {
         const row = tbody.insertRow();
+        if (editingItemIndex === index) {
+            row.style.backgroundColor = 'var(--bg-tertiary)';
+        }
         row.innerHTML = `
-            <td>${index + 1}</td>
-            <td>${item.machine || ''}</td>
             <td>${item.type || ''}</td>
-            <td>${item.qty || ''}</td>
+            <td>${item.qty === 0 ? '' : item.qty}</td>
             <td>${item.length || ''}</td>
             <td>${item.dia || ''}</td>
             <td>${item.shore || ''}</td>
             <td>${item.remarks || ''}</td>
             <td>${(item.rate || 0).toFixed(2)}</td>
             <td>${(item.amount || 0).toFixed(2)}</td>
-            <td><button class="btn btn-danger btn-sm" onclick="removeItem(${index})">Remove</button></td>
+            <td>
+                <button class="btn btn-sm btn-primary" onclick="editItem(${index})">Edit</button>
+            </td>
         `;
     });
 
@@ -260,9 +357,8 @@ function renderItems() {
 }
 
 function clearItemForm() {
-    document.getElementById('item-machine').value = '';
     document.getElementById('item-type').value = '';
-    document.getElementById('item-qty').value = '1';
+    document.getElementById('item-qty').value = '';
     document.getElementById('item-length').value = '';
     document.getElementById('item-dia').value = '';
     document.getElementById('item-shore').value = '';
@@ -287,10 +383,18 @@ function clearForm() {
     document.getElementById('customer-name').value = '';
     document.getElementById('contact-person').value = '';
     document.getElementById('phone').value = '';
-    document.getElementById('delivery').value = '';
+    document.getElementById('machine-name').value = '';
     document.getElementById('remarks').value = '';
+    document.getElementById('delivery-note').value = '';
+    document.getElementById('delivery-note-date').value = '';
+    document.getElementById('buyer-order-no').value = '';
+    document.getElementById('buyer-order-date').value = '';
     document.getElementById('gst-percent').value = '18';
     items = [];
+    editingItemIndex = null;
+    document.getElementById('add-item-btn').textContent = 'Add Item';
+    document.getElementById('item-form-title').textContent = 'Add Item';
+    document.getElementById('cancel-edit-btn').style.display = 'none';
     clearItemForm();
     renderItems();
     updateTotals();
@@ -311,18 +415,16 @@ async function saveOrder(e) {
     const validItems = items.filter(item => 
         item && 
         typeof item === 'object' &&
-        item.machine && 
-        item.machine.trim() !== '' && 
         !isNaN(item.rate) && 
         item.rate >= 0 &&
         !isNaN(item.qty) && 
-        item.qty > 0 &&
+        item.qty >= 0 &&
         !isNaN(item.amount) &&
         item.amount >= 0
     );
 
     if (validItems.length === 0) {
-        alert('Please add at least one valid item with Machine name and Rate');
+        alert('Please add at least one valid item with Rate');
         return;
     }
 
@@ -335,8 +437,23 @@ async function saveOrder(e) {
     const gstAmount = subtotal * (gstPercent / 100);
     const total = subtotal + gstAmount;
 
-    const orderNo = document.getElementById('order-no').value.trim() || 
-                   `ORD-${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}`;
+    let orderNo = document.getElementById('order-no').value.trim();
+    
+    // Auto-generate if empty
+    if (!orderNo) {
+        orderNo = `ORD-${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}`;
+    }
+    
+    // Check for duplicate order number
+    const existingOrder = orders.find(o => o.orderNo === orderNo);
+    if (existingOrder) {
+        const overwrite = confirm(`Order number ${orderNo} already exists!\n\nDo you want to overwrite it?`);
+        if (!overwrite) {
+            alert('Please use a different Order Number');
+            document.getElementById('order-no').focus();
+            return;
+        }
+    }
 
     const order = {
         orderNo: orderNo,
@@ -345,9 +462,9 @@ async function saveOrder(e) {
         contactPerson: document.getElementById('contact-person').value.trim(),
         phone: document.getElementById('phone').value.trim(),
         status: 'New',
+        machineName: document.getElementById('machine-name').value.trim(),
         items: items.map(item => ({
             slNo: item.slNo,
-            machine: item.machine,
             type: item.type,
             qty: item.qty,
             length: item.length,
@@ -360,8 +477,11 @@ async function saveOrder(e) {
         subtotal: subtotal,
         gst: gstAmount,
         total: total,
-        delivery: document.getElementById('delivery').value.trim(),
         remarks: document.getElementById('remarks').value.trim(),
+        deliveryNote: document.getElementById('delivery-note').value.trim(),
+        deliveryNoteDate: document.getElementById('delivery-note-date').value,
+        buyerOrderNo: document.getElementById('buyer-order-no').value.trim(),
+        buyerOrderDate: document.getElementById('buyer-order-date').value,
         createdDate: new Date().toISOString()
     };
 
@@ -369,29 +489,161 @@ async function saveOrder(e) {
         await invoke('save_order', { order });
         alert(`Order ${orderNo} saved successfully!`);
         clearForm();
-        await loadOrders(true);
+        await loadOrders(true, 1);
         switchTab('view');
     } catch (error) {
         alert(`Error saving order: ${error}`);
     }
 }
 
-async function loadOrders(reload = false) {
+async function loadOrders(reload = false, page = 1) {
     try {
         if (reload) {
-            orders = await invoke('load_orders');
+            currentPage = page;
+            const result = await invoke('load_orders', { page: currentPage, pageSize: pageSize });
+            console.log('Loaded orders result:', result);
+            console.log('Result keys:', Object.keys(result));
+            orders = result.orders || [];
+            totalOrders = result.total || 0;
+            totalPages = result.totalPages || result.total_pages || 1;
+            console.log(`Loaded ${orders.length} orders, total: ${totalOrders}, page: ${currentPage}/${totalPages}`);
+            updatePaginationInfo();
         }
-        
-        const statusFilter = document.getElementById('status-filter').value;
-        const filteredOrders = statusFilter === 'All' 
-            ? orders 
-            : orders.filter(o => o.status === statusFilter);
-
-        renderOrders(filteredOrders);
+        applyFiltersAndSort();
     } catch (error) {
         console.error('Error loading orders:', error);
         orders = [];
+        filteredOrders = [];
+        totalOrders = 0;
+        totalPages = 1;
         renderOrders([]);
+        updatePaginationInfo();
+    }
+}
+
+function applyFiltersAndSort() {
+    const statusFilter = document.getElementById('status-filter').value;
+    const searchQuery = document.getElementById('search-input').value.toLowerCase().trim();
+    
+    console.log(`Applying filters - Status: ${statusFilter}, Search: ${searchQuery}, Orders loaded: ${orders.length}`);
+    
+    // Filter by status
+    filteredOrders = statusFilter === 'All' 
+        ? [...orders] 
+        : orders.filter(o => o.status === statusFilter);
+    
+    console.log(`After status filter: ${filteredOrders.length} orders`);
+    
+    // Filter by search query
+    if (searchQuery) {
+        filteredOrders = filteredOrders.filter(o => 
+            o.orderNo.toLowerCase().includes(searchQuery) ||
+            o.customerName.toLowerCase().includes(searchQuery)
+        );
+        console.log(`After search filter: ${filteredOrders.length} orders`);
+    }
+    
+    // Sort
+    if (sortColumn) {
+        filteredOrders.sort((a, b) => {
+            let aVal = a[sortColumn];
+            let bVal = b[sortColumn];
+            
+            // Handle itemsCount (special case)
+            if (sortColumn === 'itemsCount') {
+                aVal = a.items.length;
+                bVal = b.items.length;
+            }
+            
+            // Handle dates
+            if (sortColumn === 'date') {
+                aVal = new Date(aVal);
+                bVal = new Date(bVal);
+            }
+            
+            // Handle numbers
+            if (sortColumn === 'total' || sortColumn === 'itemsCount') {
+                aVal = Number(aVal) || 0;
+                bVal = Number(bVal) || 0;
+            }
+            
+            // Handle strings
+            if (typeof aVal === 'string') {
+                aVal = aVal.toLowerCase();
+                bVal = bVal.toLowerCase();
+            }
+            
+            if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+            if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }
+    
+    console.log(`Rendering ${filteredOrders.length} orders`);
+    renderOrders(filteredOrders);
+    updatePaginationInfo();
+}
+
+function updateSortIcons() {
+    document.querySelectorAll('.sortable').forEach(th => {
+        const icon = th.querySelector('.sort-icon');
+        if (th.dataset.sort === sortColumn) {
+            icon.textContent = sortDirection === 'asc' ? ' ↑' : ' ↓';
+        } else {
+            icon.textContent = ' ↕';
+        }
+    });
+}
+
+function updatePaginationInfo() {
+    // Check if pagination elements exist (only on view tab)
+    const startEl = document.getElementById('pagination-start');
+    if (!startEl) return; // Pagination elements don't exist, skip update
+    
+    const start = filteredOrders.length > 0 ? ((currentPage - 1) * pageSize) + 1 : 0;
+    const end = start + filteredOrders.length - 1;
+    
+    const endEl = document.getElementById('pagination-end');
+    const totalEl = document.getElementById('pagination-total');
+    const currentEl = document.getElementById('pagination-current');
+    const totalPagesEl = document.getElementById('pagination-total-pages');
+    
+    if (startEl) startEl.textContent = start;
+    if (endEl) endEl.textContent = end;
+    if (totalEl) totalEl.textContent = totalOrders;
+    if (currentEl) currentEl.textContent = currentPage;
+    if (totalPagesEl) totalPagesEl.textContent = totalPages;
+    
+    // Enable/disable pagination buttons
+    const prevBtn = document.getElementById('pagination-prev');
+    const nextBtn = document.getElementById('pagination-next');
+    if (prevBtn) prevBtn.disabled = currentPage <= 1;
+    if (nextBtn) nextBtn.disabled = currentPage >= totalPages;
+}
+
+async function goToPage(page) {
+    if (page < 1 || page > totalPages) return;
+    await loadOrders(true, page);
+}
+
+function setupPaginationHandlers() {
+    const prevBtn = document.getElementById('pagination-prev');
+    const nextBtn = document.getElementById('pagination-next');
+    
+    if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+            if (currentPage > 1) {
+                goToPage(currentPage - 1);
+            }
+        });
+    }
+    
+    if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+            if (currentPage < totalPages) {
+                goToPage(currentPage + 1);
+            }
+        });
     }
 }
 
@@ -399,7 +651,13 @@ function renderOrders(ordersList) {
     const tbody = document.getElementById('orders-tbody');
     tbody.innerHTML = '';
 
-    ordersList.forEach((order, index) => {
+    if (!ordersList || ordersList.length === 0) {
+        const row = tbody.insertRow();
+        row.innerHTML = `<td colspan="10" style="text-align: center; padding: 20px; color: var(--text-secondary);">No orders found. ${totalOrders > 0 ? `Total orders in database: ${totalOrders}. Try checking other pages or clearing filters.` : 'No orders in database.'}</td>`;
+        return;
+    }
+
+    ordersList.forEach((order) => {
         const row = tbody.insertRow();
         row.innerHTML = `
             <td>${order.orderNo}</td>
@@ -407,35 +665,41 @@ function renderOrders(ordersList) {
             <td>${order.customerName}</td>
             <td>${order.contactPerson || ''}</td>
             <td>${order.phone || ''}</td>
-            <td><span class="status-badge status-${order.status.toLowerCase().replace(' ', '-')}">${order.status}</span></td>
+            <td><span class="status-badge status-${order.status.toLowerCase().replace(/\s+/g, '-')}">${order.status}</span></td>
             <td>${order.items.length}</td>
             <td>${order.total.toFixed(2)}</td>
-            <td>${order.delivery || ''}</td>
             <td>
-                <button class="btn btn-sm btn-primary" onclick="viewOrderDetails(${index})">View</button>
-                <button class="btn btn-sm btn-secondary" onclick="changeOrderStatus(${index})">Status</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteOrder(${index})">Delete</button>
+                <button class="btn btn-sm btn-primary" onclick="viewOrderDetailsByOrderNo('${order.orderNo}')">View</button>
+                <button class="btn btn-sm btn-secondary" onclick="changeOrderStatusByOrderNo('${order.orderNo}')">Status</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteOrderByOrderNo('${order.orderNo}')">Delete</button>
             </td>
         `;
     });
 }
 
-function viewOrderDetails(index) {
-    const order = orders[index];
+function viewOrderDetailsByOrderNo(orderNo) {
+    const order = orders.find(o => o.orderNo === orderNo);
+    if (!order) {
+        alert('Order not found');
+        return;
+    }
+    viewOrderDetails(order);
+}
+
+function viewOrderDetails(order) {
     currentViewingOrder = order; // Store for printing
     const content = document.getElementById('order-details-content');
     
-    let itemsHtml = '<table class="details-table"><thead><tr><th>Sl.</th><th>Machine</th><th>Type</th><th>Qty</th><th>Length</th><th>Dia</th><th>Shore</th><th>Remarks</th><th>Rate</th><th>Amount</th></tr></thead><tbody>';
+    let itemsHtml = '<table class="details-table"><thead><tr><th>Sl.</th><th>Type</th><th>Qty</th><th>Length</th><th>Dia</th><th>Shore</th><th>Remarks</th><th>Rate</th><th>Amount</th></tr></thead><tbody>';
     order.items.forEach(item => {
         itemsHtml += `<tr>
             <td>${item.slNo}</td>
-            <td>${item.machine}</td>
-            <td>${item.type}</td>
+            <td>${item.type || ''}</td>
             <td>${item.qty}</td>
-            <td>${item.length}</td>
-            <td>${item.dia}</td>
-            <td>${item.shore}</td>
-            <td>${item.remarks}</td>
+            <td>${item.length || ''}</td>
+            <td>${item.dia || ''}</td>
+            <td>${item.shore || ''}</td>
+            <td>${item.remarks || ''}</td>
             <td>${item.rate.toFixed(2)}</td>
             <td>${item.amount.toFixed(2)}</td>
         </tr>`;
@@ -444,31 +708,91 @@ function viewOrderDetails(index) {
 
     content.innerHTML = `
         <div class="order-details">
-            <p><strong>Order No:</strong> ${order.orderNo}</p>
-            <p><strong>Date:</strong> ${order.date}</p>
-            <p><strong>Customer:</strong> ${order.customerName}</p>
-            <p><strong>Contact Person:</strong> ${order.contactPerson || ''}</p>
-            <p><strong>Phone:</strong> ${order.phone || ''}</p>
-            <p><strong>Status:</strong> ${order.status}</p>
-            <p><strong>Delivery:</strong> ${order.delivery || ''}</p>
-            <p><strong>Remarks:</strong> ${order.remarks || ''}</p>
-            <h3>Items:</h3>
+            <div class="form-section" style="border: none; padding: 20px 0; margin-bottom: 20px;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Order No:</label>
+                        <div class="detail-value">${order.orderNo}</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Date:</label>
+                        <div class="detail-value">${order.date}</div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group full-width">
+                        <label>Customer (M/s):</label>
+                        <div class="detail-value">${order.customerName}</div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Contact Person:</label>
+                        <div class="detail-value">${order.contactPerson || ''}</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Phone:</label>
+                        <div class="detail-value">${order.phone || ''}</div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Remarks:</label>
+                        <div class="detail-value">${order.remarks || ''}</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Delivery Note:</label>
+                        <div class="detail-value">${order.deliveryNote || ''}</div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Delivery Note Date:</label>
+                        <div class="detail-value">${order.deliveryNoteDate || ''}</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Buyer's Order Number:</label>
+                        <div class="detail-value">${order.buyerOrderNo || ''}</div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Buyer's Order Date:</label>
+                        <div class="detail-value">${order.buyerOrderDate || ''}</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Status:</label>
+                        <div class="detail-value"><span class="status-badge status-${order.status.toLowerCase().replace(/\s+/g, '-')}">${order.status}</span></div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Name of the Machine:</label>
+                        <div class="detail-value">${order.machineName || ''}</div>
+                    </div>
+                </div>
+            </div>
+            <h3 style="margin-top: 20px; margin-bottom: 10px;">Items:</h3>
             ${itemsHtml}
             <div class="totals-summary">
                 <p><strong>Subtotal:</strong> Rs. ${order.subtotal.toFixed(2)}</p>
                 <p><strong>GST:</strong> Rs. ${order.gst.toFixed(2)}</p>
                 <p><strong>Total:</strong> Rs. ${order.total.toFixed(2)}</p>
             </div>
-            <p><strong>Created:</strong> ${new Date(order.createdDate).toLocaleString()}</p>
+            <p style="margin-top: 15px; color: var(--text-secondary); font-size: 13px;"><strong>Created:</strong> ${new Date(order.createdDate).toISOString().split('T')[0]}</p>
         </div>
     `;
 
     document.getElementById('order-details-modal').style.display = 'block';
 }
 
-function changeOrderStatus(index) {
-    currentOrderIndex = index;
-    const order = orders[index];
+function changeOrderStatusByOrderNo(orderNo) {
+    const order = orders.find(o => o.orderNo === orderNo);
+    if (!order) {
+        alert('Order not found');
+        return;
+    }
+    currentOrderIndex = orders.indexOf(order);
     document.getElementById('current-status').textContent = order.status;
     document.getElementById('new-status').value = order.status;
     document.getElementById('status-modal').style.display = 'block';
@@ -476,6 +800,10 @@ function changeOrderStatus(index) {
 
 async function saveStatus() {
     const newStatus = document.getElementById('new-status').value;
+    if (currentOrderIndex < 0 || currentOrderIndex >= orders.length) {
+        alert('Order not found');
+        return;
+    }
     const order = orders[currentOrderIndex];
     
     try {
@@ -485,22 +813,36 @@ async function saveStatus() {
         });
         order.status = newStatus;
         document.getElementById('status-modal').style.display = 'none';
-        await loadOrders(false);
+        await loadOrders(true, currentPage);
         alert('Status updated successfully!');
     } catch (error) {
         alert(`Error updating status: ${error}`);
     }
 }
 
-async function deleteOrder(index) {
-    const order = orders[index];
-    if (!confirm(`Are you sure you want to delete order ${order.orderNo}?`)) {
+function deleteOrderByOrderNo(orderNo) {
+    const order = orders.find(o => o.orderNo === orderNo);
+    if (!order) {
+        alert('Order not found');
         return;
     }
+    
+    // Store the orderNo and show confirmation modal
+    orderToDelete = orderNo;
+    document.getElementById('delete-order-no').textContent = order.orderNo;
+    document.getElementById('delete-modal').style.display = 'block';
+}
 
+async function confirmDeleteOrder() {
+    if (!orderToDelete) {
+        return;
+    }
+    
     try {
-        await invoke('delete_order', { orderNo: order.orderNo });
-        await loadOrders(true);
+        await invoke('delete_order', { orderNo: orderToDelete });
+        document.getElementById('delete-modal').style.display = 'none';
+        orderToDelete = null;
+        await loadOrders(true, currentPage);
         alert('Order deleted successfully!');
     } catch (error) {
         alert(`Error deleting order: ${error}`);
@@ -540,7 +882,6 @@ function generateOrderHtml(order) {
         itemsHtml += `
             <tr>
                 <td>${item.slNo}</td>
-                <td>${item.machine}</td>
                 <td>${item.type || ''}</td>
                 <td>${item.qty}</td>
                 <td>${item.length || ''}</td>
@@ -718,15 +1059,18 @@ function generateOrderHtml(order) {
                 <p><strong>Status:</strong> ${order.status}</p>
                 <p><strong>Contact Person:</strong> ${order.contactPerson || '-'}</p>
                 <p><strong>Phone:</strong> ${order.phone || '-'}</p>
-                <p><strong>Delivery:</strong> ${order.delivery || '-'}</p>
+                <p><strong>Name of the Machine:</strong> ${order.machineName || '-'}</p>
                 <p><strong>Remarks:</strong> ${order.remarks || '-'}</p>
+                <p><strong>Delivery Note:</strong> ${order.deliveryNote || '-'}</p>
+                <p><strong>Delivery Note Date:</strong> ${order.deliveryNoteDate || '-'}</p>
+                <p><strong>Buyer's Order Number:</strong> ${order.buyerOrderNo || '-'}</p>
+                <p><strong>Buyer's Order Date:</strong> ${order.buyerOrderDate || '-'}</p>
             </div>
 
             <table class="print-table">
                 <thead>
                     <tr>
                         <th>Sl.</th>
-                        <th>Name of Machine</th>
                         <th>Type</th>
                         <th>Qty</th>
                         <th>Length</th>
@@ -777,7 +1121,48 @@ async function saveOrderAsPdf() {
     const htmlContent = generateOrderHtml(order);
     
     try {
-        // Try to use Tauri's file save dialog
+        // Check if html2pdf is available
+        if (typeof html2pdf !== 'undefined' && html2pdf) {
+            // Create a temporary container for PDF generation
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = htmlContent;
+            tempDiv.style.position = 'absolute';
+            tempDiv.style.left = '-9999px';
+            tempDiv.style.width = '210mm'; // A4 width
+            document.body.appendChild(tempDiv);
+            
+            try {
+                const opt = {
+                    margin: [0.5, 0.5, 0.5, 0.5],
+                    filename: `Order_${order.orderNo}.pdf`,
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { 
+                        scale: 2, 
+                        useCORS: true,
+                        logging: false,
+                        letterRendering: true,
+                        windowWidth: 800
+                    },
+                    jsPDF: { 
+                        unit: 'mm', 
+                        format: 'a4', 
+                        orientation: 'portrait' 
+                    },
+                    pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+                };
+                
+                await html2pdf().set(opt).from(tempDiv).save();
+                document.body.removeChild(tempDiv);
+                alert(`Order saved as PDF: Order_${order.orderNo}.pdf`);
+                return;
+            } catch (pdfError) {
+                console.error('PDF generation error:', pdfError);
+                document.body.removeChild(tempDiv);
+                throw pdfError;
+            }
+        }
+        
+        // Fallback: Try to use Tauri's file save dialog with HTML, then convert
         if (saveDialog && invoke) {
             const filePath = await saveDialog({
                 defaultPath: `Order_${order.orderNo}.html`,
@@ -788,28 +1173,30 @@ async function saveOrderAsPdf() {
             });
 
             if (filePath) {
-                // Save HTML file using Tauri
                 await invoke('save_order_html', { 
                     filePath: filePath, 
                     content: htmlContent 
                 });
                 alert(`Order saved as HTML!\n\nTo convert to PDF:\n1. Open the saved file in your browser\n2. Press Ctrl+P (or Cmd+P on Mac)\n3. Choose "Save as PDF" as the destination`);
+                return;
             }
-        } else {
-            // Browser fallback - download as HTML
-            const blob = new Blob([htmlContent], { type: 'text/html' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `Order_${order.orderNo}.html`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            alert(`Order downloaded as HTML!\n\nTo convert to PDF:\n1. Open the downloaded file in your browser\n2. Press Ctrl+P (or Cmd+P on Mac)\n3. Choose "Save as PDF" as the destination`);
         }
+        
+        // Browser fallback - download as HTML
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Order_${order.orderNo}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        alert(`Order downloaded as HTML!\n\nTo convert to PDF:\n1. Open the downloaded file in your browser\n2. Press Ctrl+P (or Cmd+P on Mac)\n3. Choose "Save as PDF" as the destination`);
     } catch (error) {
-        console.error('Save error:', error);
+        console.error('Save PDF error:', error);
+        alert(`Error saving PDF: ${error.message || error}\n\nFalling back to HTML download.`);
+        
         // Fallback - download as HTML
         const blob = new Blob([htmlContent], { type: 'text/html' });
         const url = URL.createObjectURL(blob);
@@ -820,13 +1207,35 @@ async function saveOrderAsPdf() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        alert(`Order downloaded as HTML!\n\nTo convert to PDF: Open the file in your browser and use Print → Save as PDF`);
     }
+}
+
+// Theme Management
+function loadTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    applyTheme(savedTheme);
+}
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    const themeIcon = document.querySelector('.theme-icon');
+    if (themeIcon) {
+        themeIcon.textContent = theme === 'dark' ? '☀️' : '🌙';
+    }
+    localStorage.setItem('theme', theme);
+}
+
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    applyTheme(newTheme);
 }
 
 // Make functions available globally for onclick handlers
 window.removeItem = removeItem;
-window.viewOrderDetails = viewOrderDetails;
-window.changeOrderStatus = changeOrderStatus;
-window.deleteOrder = deleteOrder;
+window.editItem = editItem;
+window.viewOrderDetailsByOrderNo = viewOrderDetailsByOrderNo;
+window.changeOrderStatusByOrderNo = changeOrderStatusByOrderNo;
+window.deleteOrderByOrderNo = deleteOrderByOrderNo;
 window.saveOrderAsPdf = saveOrderAsPdf;
+window.toggleTheme = toggleTheme;
